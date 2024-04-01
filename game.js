@@ -22,12 +22,56 @@ const SCENE_BORDER = true;
 const DISABLE_LINE_MOVE = false;
 const INTERVAL_LINE_MOVE = 2000;
 const LINE_MOVE_TYPE = '';
+const COLOR_TYPE = 'morandi';
+let RAW_RECORDS = [];
+
+let stringRecord = localStorage.getItem('record');
+let obj = JSON.parse(stringRecord);
+if (obj) RAW_RECORDS = obj;
+
+function stringifyRecords() {
+  let result = '';
+  let structedRecords = [];
+  for (let record of RAW_RECORDS) {
+    let level = record.level;
+    if (!structedRecords[level] || ! structedRecords[level] instanceof Array) {
+      structedRecords[level] = [];
+    }
+    structedRecords[level].push(record.spent);
+  }
+  result += `level:spent\n`;
+  for (let rec = structedRecords.length - 1; rec >0 ;rec--) {
+    if (structedRecords[rec] && structedRecords[rec].length) {
+      result += `${rec}:${structedRecords[rec].sort().join(', ')}\n`;
+    }
+  }
+  return result;
+}
+
+let recording = null;
+
+class Record {
+  constructor() {
+    this.beginTime = new Date().getTime();
+    this.endTime = null;
+    this.level = gameState.level;
+  }
+  done() {
+    this.endTime = new Date().getTime();
+    RAW_RECORDS.push({
+      level: this.level,
+      spent: this.endTime - this.beginTime,
+    })
+
+    localStorage.setItem('record', JSON.stringify(RAW_RECORDS));
+  }
+}
 
 let paused = false;
 
 const TIPS = detectMobile() ?
     `Double Tap for reset`:
-    `ESC for reset,\nSpace for pause`;
+    `ESC for reset\nSpace for pause`;
 
 function detectMobile() {
   const toMatch = [
@@ -45,11 +89,23 @@ function detectMobile() {
   });
 }
 
+CanvasRenderingContext2D.prototype.fillTextMultiLine =
+function fillTextMultiLine(text, x, y) {
+  var lineHeight = this.measureText("M").width * 1.2;
+  var lines = text.split("\n");
+  for (var i = 0; i < lines.length; ++i) {
+    this.fillText(lines[i], x, y);
+    y += lineHeight;
+  }
+}
+
 class PresetLine {
-  constructor(middlePoint, angle, length) {
+  constructor(middlePoint, length, angle, spinspeed) {
     this.middlePoint = middlePoint;
-    this.angle = angle;
     this.length = length;
+    this.originalAngle = angle;
+    this.angle = angle;
+    this.spinspeed = spinspeed;
     this.x1 = 0; this.x2 = 0; this.y1 = 0; this.y2 = 0;
     this.reCalculate();
   }
@@ -59,6 +115,15 @@ class PresetLine {
     this.y1 = this.middlePoint.y - this.length * Math.cos(this.angle) / 2;
     this.x2 = this.middlePoint.x + this.length * Math.sin(this.angle) / 2;
     this.y2 = this.middlePoint.y + this.length * Math.cos(this.angle) / 2;
+  }
+
+  spin() {
+    let delta = Math.abs(this.angle - this.originalAngle) % (Math.PI * 2);
+    if (delta > 0 && delta < Math.abs(this.spinspeed)) {
+      this.spinspeed *= Math.sign(Math.random() - 0.5);
+    }
+    this.angle += this.spinspeed;
+    this.reCalculate();
   }
 
   rotate(angleDelta) {
@@ -77,7 +142,8 @@ PresetLine.random = function() {
   };
   let length = Math.min(canvas.width, canvas.height) * (Math.random() * 0.6 + 0.2);
   let angle = Math.random() * Math.PI * 2; // 随机角度 from 0 to 360 degrees (in radians)
-  return new PresetLine(middlePoint, angle, length);
+  let spinspeed = (Math.random() -0.5) * Math.PI * 0.5 / 180;
+  return new PresetLine(middlePoint, length, angle, spinspeed);
 }
 
 class Velocity {
@@ -155,6 +221,9 @@ let currentLine = { x1: 0, y1: 0, x2: 0, y2: 0 };
 
 function updateGameState(levelDelta) {
   pause();
+  ctx.save();
+  ctx.clearRect(-10, -10, canvas.width + 10, canvas.height+10);
+  drawStringInformation(randomColor(true));
 
   if (levelDelta == -1 || levelDelta == 1) {
     gameState.level += levelDelta;
@@ -183,11 +252,12 @@ function updateGameState(levelDelta) {
   }
   gameState.userLines = [];
   gameState.usedColors.clear();
-  gameState.userColor = morandiColor();
+  gameState.userColor = randomColor();
 
 
   setTimeout(() => {
     resume();
+    recording = new Record();
   }, 200);
 }
 
@@ -325,12 +395,37 @@ function lineNormal(x1, y1, x2, y2) {
   return { x: -dy, y: dx };
 }
 
-function morandiColor() {
-  // 莫兰迪色调通常具有较低的饱和度
-  let saturation = Math.random() * 0.5 + 0.3; // 30%-50% 饱和度
-  let value = Math.random() * 0.2 + 0.6; // 60%-80% 亮度
-  let hue = Math.random() * 360; // 0-360 色相
+function randomColor(temp) {
+  const type = COLOR_TYPE;
+  let saturation = Math.random(); // 30%-50% 饱和度
+  let value = Math.random(); // 60%-80% 亮度
+  let hue = Math.random(); // 0-360 色相
+  switch (type) {
+    case "morandi":
+      saturation = Math.random() * 0.2 + 0.3; // 30%-50% 饱和度
+      value = Math.random() * 0.2 + 0.6; // 60%-80% 亮度
+      hue = Math.random() * 360; // 0-360 色相
+      break;
+    case "macaron":
+      hue = Math.random() * 360; // 色相在0-360之间随机
+      saturation = 0.8 + Math.random() * 0.2; // 饱和度在0.8-1.0之间随机
+      value = 0.8 + Math.random() * 0.2; // 明度在0.8-1.0之间随机
+      break;
+  }
 
+  let newColor = hsvToHex(hue, saturation, value);
+
+  if (temp) {
+    return newColor; // dont record this one;
+  }
+  if (gameState.usedColors.has(newColor)) {
+    return randomColor(type, temp);
+  }
+  gameState.usedColors.add(newColor);
+  return newColor;
+}
+
+function hsvToHex(hue, saturation, value) {
   function hsvToRgb(h, s, v) {
     let r, g, b;
 
@@ -358,25 +453,18 @@ function morandiColor() {
     return "#" + toHex(r) + toHex(g) + toHex(b);
   }
 
-  let newColor = hsvToRgb(hue, saturation, value);
-  if (gameState.usedColors.has(newColor)) {
-    return morandiColor();
-  }
-  gameState.usedColors.add(newColor);
-  return newColor;
+  return hsvToRgb(hue, saturation, value);
+
 }
 
-
-
-function draw() {
-  ctx.clearRect(-10, -10, canvas.width+10, canvas.height+10);
+function drawStringInformation(color) {
   ctx.lineWidth = LINE_WIDTH;
 
   // 绘制背景等级/提示
   {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#e0e0e0e0';
+    ctx.fillStyle = color;
 
     function calcFontSize(text) {
       return Math.min(540, Math.min(canvas.width,canvas.height) / text.length);
@@ -386,17 +474,31 @@ function draw() {
     ctx.font = `${ calcFontSize(text)}px Seirf`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#e0e0e0e0';
     let x = canvas.width / 2;
     let y = canvas.height / 2;
-    ctx.fillText(text, x, y);
+    ctx.fillTextMultiLine(text, x, y);
 
     let tip = TIPS;
     let tipfontsize = Math.min(canvas.width,canvas.height) / tip.length;
     ctx.font = `${tipfontsize}px Seirf`;
-    ctx.fillText(tip, x, tipfontsize);
-  }
+    ctx.fillTextMultiLine(tip, x, tipfontsize);
 
+
+    let rec = stringifyRecords();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.font = `${getComputedStyle(document.documentElement).fontSize}px Seifr`;
+    ctx.fillTextMultiLine(rec, 0, 0);
+
+  }
+}
+
+function draw() {
+  ctx.clearRect(-10, -10, canvas.width+10, canvas.height+10);
+
+
+  let stringColor = '#e0e0e0e0';
+  drawStringInformation(stringColor);
 
   // 绘制点
   ctx.fillStyle = 'black';
@@ -411,7 +513,7 @@ function draw() {
 
   function drawLine(line) {
     if (line.color == undefined || line.color == null) {
-      line.color = morandiColor();
+      line.color = randomColor("morandi");
     }
     ctx.strokeStyle = `${line.color}`;
     ctx.beginPath();
@@ -422,6 +524,7 @@ function draw() {
   }
 
   // 在新的级别中绘制一条线
+  gameState.lines.forEach(line=>line.spin());
   gameState.lines.forEach(drawLine);
   // 绘制用户线
   gameState.userLines.forEach(drawLine);
@@ -492,9 +595,8 @@ function gameLoop() {
     nextDot.y > gameState.targetBox.y &&
     nextDot.y < gameState.targetBox.y + gameState.targetBox.height
   ) {
+    recording.done();
     incrementLevel(); // 如果点进入框，则等级加一
-    draw();
-    requestAnimationFrame(gameLoop);
     return;
   }
 
@@ -590,6 +692,7 @@ if (INTERVAL_LINE_MOVE > 0) {
 function moveLinesRandomly() {
   if (DISABLE_LINE_MOVE) { return; }
   if (paused) { return; }
+  return;
 
   gameState.lines.forEach((line)=> {
     line.rotate(Math.PI / 6 * Math.random());
